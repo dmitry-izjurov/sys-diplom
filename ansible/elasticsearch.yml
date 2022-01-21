@@ -1,0 +1,59 @@
+---
+- hosts: elasticsearch
+
+  vars:
+    ip_address: "{{ hostvars.elasticsearch.ansible_host }}"
+
+  tasks:
+  - name: Add an Apt signing key, uses whichever key is at the URL
+    ansible.builtin.apt_key:
+      url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+      state: present
+
+  - name: Add specified repository into sources list using specified filename
+    ansible.builtin.apt_repository:
+      repo: deb https://artifacts.elastic.co/packages/7.x/apt stable main
+      state: present
+      filename: elastic-7.x.list
+
+  - name: Update repositories cache and install "elasticsearch" package
+    apt:
+      name: elasticsearch
+      update_cache: yes
+
+  - name: Systemd daemon_reload
+    systemd:
+      daemon_reload: yes
+
+  - name: Make sure a service is running
+    systemd:
+      state: started
+      name: elasticsearch
+
+  - name: enable service elasticsearch and ensure it is not masked
+    systemd:
+      name: elasticsearch
+      enabled: yes
+      masked: no
+
+  - name: config format elasticsearch (add network.host)
+    lineinfile:
+      dest: /etc/elasticsearch/elasticsearch.yml
+      insertbefore: '^\s*#network.host'
+      line: 'network.host: {{ ip_address  }}'
+      state: present
+
+  - name: config  format elasticsearch (add discovery.seed_hosts)
+    lineinfile:
+      dest: /etc/elasticsearch/elasticsearch.yml
+      insertafter: '^\s*#discovery.seed_hosts'
+      line: 'discovery.seed_hosts: ["elasticsearch"]'
+      state: present
+
+  - name: restarted service elasticsearch
+    systemd:
+      state: restarted
+      name: elasticsearch
+
+  become: yes
+  become_method: sudo

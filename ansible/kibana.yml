@@ -1,0 +1,60 @@
+---
+- hosts: kibana
+
+  vars:
+    ip_address_kibana: "{{ hostvars.kibana.ansible_host  }}"
+    ip_address_elastic: "{{ hostvars.kibana.ansible_host  }}"
+
+  tasks:
+    - name: Add an Apt signing key, uses whichever key is at the URL
+      ansible.builtin.apt_key:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        state: present
+
+    - name: Add specified repository into sources list using specified filename
+      ansible.builtin.apt_repository:
+        repo: deb https://artifacts.elastic.co/packages/7.x/apt stable main
+        state: present
+        filename: elastic-7.x.list
+
+    - name: Update repositories cache and install "kibana" package
+      apt:
+        name: kibana
+        update_cache: yes
+
+    - name: Systemd daemon_reload
+      systemd:
+        daemon_reload: yes
+
+    - name: Make sure a service kibana is running
+      systemd:
+        state: started
+        name: kibana
+
+    - name: enable service kibana and ensure it is not masked
+      systemd:
+        name: kibana
+        enabled: yes
+        masked: no
+
+    - name: config format kibana (add server.host)
+      lineinfile:
+        dest: /etc/kibana/kibana.yml
+        insertbefore: '^\s*#server.host'
+        line: 'server.host: "0.0.0.0"'
+        state: present
+
+    - name: config format kibana (add elasticsearch.host)
+      lineinfile:
+        dest: /etc/kibana/kibana.yml
+        insertbefore: '^\s*#elasticsearch.hosts'
+        line: 'elasticsearch.hosts: ["http://{{ ip_address_elastic }}:9200"]'
+        state: present
+
+    - name: restarted service kibana
+      systemd:
+        name: kibana
+        state: restarted
+
+  become: yes
+  become_method: sudo

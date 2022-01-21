@@ -1,0 +1,289 @@
+---
+- hosts: web-servers
+
+  tasks:
+    - name: Update repositories cache and install "nginx" package
+      apt:
+        name: nginx
+        update_cache: yes
+
+    - name: Update index.html
+      shell: echo '<h1>Это тестовая версия сайта</h1><p>Если Вы видите этот текст, значит все работает</p>' > /var/www/html/index.html
+
+    - name: Make sure a service nginx is running
+      systemd:
+        state: started
+        name: nginx
+
+    - name: enable service nginx and ensure it is not masked
+      systemd:
+        name: nginx
+        enabled: yes
+        masked: no
+
+    - name: config log format web-server1
+      lineinfile:
+        dest: /etc/nginx/nginx.conf
+        insertbefore: '^\s*access_log'
+        line: '        log_format custom ''$remote_addr - [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent" "$http_x_forwarded_for" "$request_length" "$upstream_response_time" "$request_time"'';'
+        state: present
+
+    - name: config log format web-server2
+      lineinfile:
+        dest: /etc/nginx/nginx.conf
+        regexp: '^\s*access_log'
+        line: '        access_log /var/log/nginx/access.log custom;'
+        state: present
+
+    - name: Restarted nginx
+      systemd:
+        state: restarted
+        name: nginx
+
+    - name: chmod user /var/log/nginx
+      file:
+        dest: /var/log/nginx
+        mode: 0775
+        recurse: yes
+
+    - name: chmod user /var/log/nginx/error.log
+      file:
+        dest: /var/log/nginx/error.log
+        mode: 0775
+
+    - name: chmod user /var/log/nginx/access.log
+      file:
+        dest: /var/log/nginx/access.log
+        mode: 0775
+
+    - name: Create a directory "Node_exporter" if it does not exist
+      file:
+        path: /usr/local/bin/node-exporter
+        state: directory
+        owner: user
+        group: user
+        mode: 0644
+
+    - name: download node-exporter
+      ansible.builtin.unarchive:
+        src: https://github.com/prometheus/node_exporter/releases/download/v1.0.0/node_exporter-1.0.0.linux-amd64.tar.gz
+        dest: /usr/local/bin/node-exporter
+        remote_src: yes
+
+    - name: Copy file /usr/local/bin/node-exporter/node_exporter
+      copy:
+        src: /usr/local/bin/node-exporter/node_exporter-1.0.0.linux-amd64/node_exporter
+        dest: /usr/local/bin/node-exporter/node_exporter
+        remote_src: yes
+
+    - name: chmod user /etc/prometheus/node-exporte/node_exporter
+      file:
+        dest: /usr/local/bin/node-exporter
+        owner: user
+        group: user
+        mode: 0775
+        recurse: yes
+
+    - name: Touch node-exporter.service
+      file:
+        path: "/etc/systemd/system/node-exporter.service"
+        owner: root
+        group: root
+        mode: 0777
+        state: touch
+    
+    - name: Add text with node-exporter.service
+      lineinfile:
+        dest: /etc/systemd/system/node-exporter.service
+        line: "{{ item }}"
+      with_items:
+        - "[Unit]"
+        - Description=Node Exporter Lesson 9.4
+        - After=network.target
+        - "[Service]"
+        - User=user
+        - Group=user
+        - Type=simple
+        - ExecStart=/usr/local/bin/node-exporter/node_exporter
+        - "[Install]"
+        - WantedBy=multi-user.target
+
+    - name: Make sure a service is running
+      systemd:
+        state: started
+        name: node-exporter
+
+    - name: enable service tuned and ensure it is not masked
+      systemd:
+        name: node-exporter
+        enabled: yes
+        masked: no
+
+    - name: Install ./prometheus-nginxlog-exporter_1.8.0_linux_amd64.deb
+      apt:
+       deb: https://github.com/martin-helmich/prometheus-nginxlog-exporter/releases/download/v1.8.0/prometheus-nginxlog-exporter_1.8.0_linux_amd64.deb
+
+    - name: config log format prometheus-nginxlog-exporter
+      lineinfile:
+       dest: /etc/prometheus-nginxlog-exporter.hcl
+       regexp: '^\s* format'
+       line: '     format = "$remote_addr - [$time_local] \"$request\" $status $body_bytes_sent \"$http_referer\" \"$http_user_agent\" \"$http_x_forwarded_for\" \"$request_length\" \"$upstream_response_time\" \"$request_time\""'
+       backrefs: yes
+
+    - name: Make sure a service prometheus-nginxlog-exporter is running
+      systemd:
+        state: started
+        name: prometheus-nginxlog-exporter
+    
+    - name: enable service prometheus-nginxlog-exporter and ensure it is not masked
+      systemd:
+        name: prometheus-nginxlog-exporter
+        enabled: yes
+        masked: no
+
+    - name: Install "filebeat" package https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.15.1-amd64.deb
+      apt:
+       deb: https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.16.2-amd64.deb
+
+    - name: Systemd daemon_reload
+      systemd:
+        daemon_reload: yes
+
+    - name: Make sure a service filebeat is running
+      systemd:
+        state: started
+        name: filebeat
+
+    - name: enable service filebeat and ensure it is not masked
+      systemd:
+        name: filebeat
+        enabled: yes
+        masked: no
+
+    - name: Delete filebeat.yml
+      file:
+        path: "/etc/filebeat/filebeat.yml"
+        state: absent
+
+    - name: Touch filebeat.yml
+      file:
+        path: "/etc/filebeat/filebeat.yml"
+        owner: root
+        group: root
+        mode: 0644
+        state: touch
+
+  become: yes
+  become_method: sudo
+
+- hosts: web-server1
+  remote_user: user
+  vars:
+    ip_address_webserver: "{{ hostvars.web-server1.ansible_host  }}"
+    ip_address_elasticsearch: "{{ hostvars.elasticsearch.ansible_host  }}"
+
+  tasks:
+    - name: Create file Add text with filebeat.yml (access.log)
+      blockinfile:
+        path: /etc/filebeat/filebeat.yml
+        marker: "##"
+        block: |
+           {{ item }}
+      with_items:
+        - 'filebeat.inputs:'
+        - '  - type: log'
+        - '    enabled: true'
+        - '    index: "filebeat-{{ ip_address_web-server }}-acccess"'
+        - '    paths:'
+        - '        - /var/log/nginx/access.log'
+        - '    fields:'
+        - '      type: nginx_access'
+        - '    fields_under_root: true'
+        - '    scan_frequency: 5s'
+
+    - name: Add text with filebeat.yml (error.log)
+      blockinfile:
+        path: /etc/filebeat/filebeat.yml
+        marker: "##"
+        block: |
+           {{ item }}
+      with_items:
+        -  '  - type: log'
+        -  '    enabled: true'
+        -  '    index: "filebeat-{{ ip_address_web-server }}-error"'
+        -  '    paths:'
+        -  '        - /var/log/nginx/error.log'
+        -  '    fields:'
+        -  '      type: nginx_error'
+        -  '    fields_under_root: true'
+        -  '    scan_frequency: 5s'
+        -  '##'
+        -  'output.elasticsearch:'
+        -  '   hosts: ["{{ ip_address_elasticsearch }}:9200"]'
+
+    - name: Update index.html
+      shell: echo '<h1>Это тестовая версия сайта</h1><p>Если Вы видите этот текст, значит все работает</p>' > /var/www/html/index.html
+
+    - name: Make sure a service filebeat is running
+      systemd:
+        state: started
+        name: filebeat
+
+  become: yes
+  become_method: sudo
+
+- hosts: web-server2
+  become: yes
+  vars:
+    ip_address_webserver: "{{ hostvars.web-server2.ansible_host  }}"
+    ip_address_elasticsearch: "{{ hostvars.elasticsearch.ansible_host  }}"
+
+  tasks:
+    - name: Create file Add text with filebeat.yml (access.log)
+      blockinfile:
+        path: /etc/filebeat/filebeat.yml
+        marker: "##"
+        block: |
+           {{ item }}
+      with_items:
+        - 'filebeat.inputs:'
+        - '  - type: log'
+        - '    enabled: true'
+        - '    index: "filebeat-{{ ip_address_web-server }}-acccess"'
+        - '    paths:'
+        - '        - /var/log/nginx/access*.log'
+        - '    fields:'
+        - '      type: nginx_access'
+        - '    fields_under_root: true'
+        - '    scan_frequency: 5s'
+
+    - name: Add text with filebeat.yml (error.log)
+      blockinfile:
+        path: /etc/filebeat/filebeat.yml
+        marker: "##"
+        block: |
+           {{ item }}
+      with_items:
+        -  '  - type: log'
+        -  '    enabled: true'
+        -  '    index: "filebeat-{{ ip_address_web-server }}-error"'
+        -  '    paths:'
+        -  '        - /var/log/nginx/error*.log'
+        -  '    fields:'
+        -  '      type: nginx_error'
+        -  '    fields_under_root: true'
+        -  '    scan_frequency: 5s'
+        -  '##'
+        -  'output.elasticsearch:'
+        -  '   hosts: ["{{ ip_address_elasticsearch }}:9200"]'
+
+    - name: Update index.html
+      shell: echo '<h1>Это тестовая версия сайта</h1><p>Если Вы видите этот текст, значит все работает</p>' > /var/www/html/index.html
+
+    - name: Make sure a service filebeat is running
+      systemd:
+        state: started
+        name: filebeat
+
+  become: yes
+  become_method: sudo
